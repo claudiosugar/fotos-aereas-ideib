@@ -56,6 +56,6 @@ COPY . .
 RUN .venv/bin/playwright install --with-deps chromium
 
 # Set the command to run gunicorn using the shell form to allow $PORT substitution
-# Increase worker timeout to 180 seconds for long-running Playwright tasks
+# Increase worker timeout to 360 seconds for long-running Playwright tasks
 ENV PORT=8080
-CMD /app/.venv/bin/gunicorn --workers 1 --timeout 180 fotos-aereas-ideib:app --bind :$PORT
+CMD /app/.venv/bin/gunicorn --workers 1 --timeout 360 fotos-aereas-ideib:app --bind :$PORT
