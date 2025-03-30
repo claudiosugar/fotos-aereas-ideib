@@ -1,9 +1,11 @@
 from playwright.sync_api import sync_playwright
 import time
 import logging
-from flask import Flask, render_template, request, send_file, jsonify
+from flask import Flask, render_template, request, send_file, jsonify, after_this_request
 import os
 from datetime import datetime
+import zipfile # Added for zipping files
+import tempfile # Added for temporary zip file
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -145,13 +147,21 @@ def take_screenshot(page, referencia_catastral, year=None):
     """Take a screenshot of the current view"""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Ensure screenshot directory exists (might be redundant but safe)
+        if not os.path.exists(SCREENSHOT_DIR):
+            os.makedirs(SCREENSHOT_DIR)
+            
         if year:
-            screenshot_path = os.path.join(SCREENSHOT_DIR, f"foto_{referencia_catastral}_{year}_{timestamp}.png")
+            # Use only the base filename for the zip archive, store in SCREENSHOT_DIR
+            base_filename = f"foto_{referencia_catastral}_{year}_{timestamp}.png"
+            screenshot_path = os.path.join(SCREENSHOT_DIR, base_filename)
         else:
-            screenshot_path = os.path.join(SCREENSHOT_DIR, f"foto_{referencia_catastral}_{timestamp}.png")
+            base_filename = f"foto_{referencia_catastral}_{timestamp}.png"
+            screenshot_path = os.path.join(SCREENSHOT_DIR, base_filename)
+            
         page.screenshot(path=screenshot_path)
         logger.info(f"Screenshot saved as {screenshot_path}")
-        return os.path.normpath(screenshot_path)  # Normalize path separators
+        return os.path.normpath(screenshot_path) # Return the full path
     except Exception as e:
         logger.error(f"Failed to take screenshot: {str(e)}")
         return None
@@ -192,7 +202,8 @@ def get_aerial_photos(referencia_catastral):
     try:
         with sync_playwright() as p:
             # Launch browser
-            browser = p.chromium.launch(headless=True)
+            # Consider headless=False for local debugging if needed
+            browser = p.chromium.launch(headless=True) 
             page = browser.new_page()
             
             # Maximize window
@@ -218,44 +229,101 @@ def get_aerial_photos(referencia_catastral):
             for year in years_to_screenshot:
                 screenshot_path = select_year_and_screenshot(page, year, referencia_catastral)
                 if screenshot_path:
-                    screenshot_paths.append(screenshot_path)
+                    screenshot_paths.append(screenshot_path) # Appends full path
             
             browser.close()
             
     except Exception as e:
         logger.error(f"Error retrieving aerial photos: {str(e)}")
+        # Ensure partial results aren't returned on error
+        return [] # Return empty list on failure
     
-    return screenshot_paths
+    return screenshot_paths # Returns list of full paths
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
+# Add a route to explicitly handle favicon requests and avoid triggering photo generation
+@app.route('/favicon.ico')
+def favicon():
+    # Return an empty 204 No Content response, or 404 Not Found
+    # return '', 204
+    return jsonify({'error': 'Not Found'}), 404 
+
 @app.route('/get_photos', methods=['POST'])
 def get_photos():
     referencia_catastral = request.form.get('referencia_catastral')
     if not referencia_catastral:
+        # Maybe render index with an error message instead of JSON?
         return jsonify({'error': 'Please provide a cadastral reference'}), 400
     
+    return process_and_zip_photos(referencia_catastral)
+
+# New route to fetch photos directly via URL path
+@app.route('/<string:referencia_catastral>', methods=['GET'])
+def get_photos_by_url(referencia_catastral):
+    logger.info(f"Received request via URL path for: {referencia_catastral}")
+    if not referencia_catastral:
+        return jsonify({'error': 'Please provide a cadastral reference in the URL path'}), 400
+    
+    return process_and_zip_photos(referencia_catastral)
+
+def process_and_zip_photos(referencia_catastral):
+    """Helper function to get photos, zip them, and return for download."""
     try:
         screenshot_paths = get_aerial_photos(referencia_catastral)
         if not screenshot_paths:
-            return jsonify({'error': 'No screenshots were generated'}), 500
+            return jsonify({'error': 'No screenshots were generated, check the reference or logs'}), 500
         
-        # Convert full paths to just filenames for the response
-        screenshot_filenames = [os.path.basename(path) for path in screenshot_paths]
+        # Create a temporary zip file
+        # Using tempfile ensures it's created securely and OS-independently
+        temp_zip = tempfile.NamedTemporaryFile(delete=False, suffix=".zip", prefix=f"fotos_{referencia_catastral}_")
+        zip_path = temp_zip.name
+        logger.info(f"Creating zip archive at: {zip_path}")
         
-        return jsonify({
-            'success': True,
-            'message': f'Generated {len(screenshot_paths)} screenshots',
-            'screenshots': screenshot_filenames
-        })
+        with zipfile.ZipFile(temp_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file_path in screenshot_paths:
+                # Add file to zip, using only the base filename inside the archive
+                zipf.write(file_path, os.path.basename(file_path))
+        
+        temp_zip.close() # Close the file handle
+        
+        # Schedule the zip file for deletion after the request is sent
+        @after_this_request
+        def cleanup(response):
+            try:
+                os.remove(zip_path)
+                logger.info(f"Successfully removed temporary zip file: {zip_path}")
+                # Optionally remove the original screenshots too
+                # for file_path in screenshot_paths:
+                #     os.remove(file_path)
+                # logger.info(f"Successfully removed original screenshot files.")
+            except Exception as error:
+                logger.error(f"Error removing temporary zip file {zip_path}: {error}")
+            return response
+            
+        # Send the zip file as an attachment
+        zip_download_name = f"fotos_{referencia_catastral}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+        logger.info(f"Sending zip file {zip_path} as attachment: {zip_download_name}")
+        return send_file(zip_path, as_attachment=True, download_name=zip_download_name)
+
     except Exception as e:
+        logger.error(f"Error processing request for {referencia_catastral}: {str(e)}")
+        # Clean up zip file if it exists and an error occurred before sending
+        if 'zip_path' in locals() and os.path.exists(zip_path):
+             try:
+                 os.remove(zip_path)
+                 logger.info(f"Cleaned up zip file {zip_path} after error.")
+             except Exception as cleanup_error:
+                 logger.error(f"Error cleaning up zip file {zip_path} after error: {cleanup_error}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/screenshots/<path:filename>')
-def serve_screenshot(filename):
-    return send_file(os.path.join(SCREENSHOT_DIR, filename))
+# Removed the /screenshots/<path:filename> route as it's no longer needed
+# @app.route('/screenshots/<path:filename>')
+# def serve_screenshot(filename):
+#     return send_file(os.path.join(SCREENSHOT_DIR, filename))
 
-# if __name__ == '__main__':
-#     app.run(debug=True)
+# Keep commented out for deployment
+if __name__ == '__main__':
+    app.run(debug=True)
