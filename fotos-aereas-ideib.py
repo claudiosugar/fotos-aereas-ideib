@@ -11,8 +11,8 @@ import tempfile # Added for temporary zip file
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Define years to screenshot
-years_to_screenshot = [1956, 1984, 1989, 2001, 2002, 2006, 2008, 2010, 2012, 2015, 2018, 2021, 2023]
+# Define years to screenshot (Reduced for testing)
+years_to_screenshot = [1956, 1984, 1989, 2001] # Was [1956, 1984, 1989, 2001, 2002, 2006, 2008, 2010, 2012, 2015, 2018, 2021, 2023]
 
 app = Flask(__name__)
 
@@ -325,5 +325,5 @@ def process_and_zip_photos(referencia_catastral):
 #     return send_file(os.path.join(SCREENSHOT_DIR, filename))
 
 # Keep commented out for deployment
-if __name__ == '__main__':
-    app.run(debug=True)
+# if __name__ == '__main__':
+#    app.run(debug=True)
