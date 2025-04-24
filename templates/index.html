@@ -28,7 +28,6 @@
     </form>
 
     <div id="loading">Generating photos and zip file... Please wait. Your download will start automatically.</div>
-    <!-- Placeholder for potential error messages if needed, although server errors might not be easily shown here now -->
     <div id="error-message"></div> 
 
     <script>
@@ -43,12 +42,6 @@
             // Optional: Disable button to prevent multiple submits
             event.target.querySelector('button[type="submit"]').disabled = true;
         });
-
-        // Note: Handling server-side errors (like 500 errors) and displaying them 
-        // here is more complex now because the primary expected response is a file download.
-        // If the server returns an error (e.g., JSON error response), the browser might 
-        // not trigger a download and might not automatically show the error in this page.
-        // Robust error handling might require more advanced techniques if needed.
     </script>
 </body>
 </html> 
